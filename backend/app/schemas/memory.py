@@ -9,6 +9,7 @@ class MemoryCreate(BaseModel):
     category: str = Field(min_length=1, max_length=100)
     content: str = Field(min_length=1)
     trust: MemoryTrust
+    provenance: dict = Field(default_factory=dict)
 
 class MemoryRead(ORMModel):
     id: uuid.UUID
@@ -16,4 +17,5 @@ class MemoryRead(ORMModel):
     category: str
     content: str
     trust: MemoryTrust
+    provenance: dict
     created_at: datetime
