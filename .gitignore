@@ -1,0 +1,42 @@
+# Environment and credentials
+.env
+.env.*
+!.env.example
+secrets/
+*.secret
+credentials.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python environments, bytecode, and test/type-check caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+
+# Local databases and logs
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Build and coverage output
+build/
+dist/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Machine-specific/editor files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
