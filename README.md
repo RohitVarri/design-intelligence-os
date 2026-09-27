@@ -128,3 +128,42 @@ The operation flow is enforced as `Analyze → Propose → Validate → Preview 
 ## Scope and limitations
 
 BUILD 03 does not include a production provider integration, live internet search/scraping, a design sandbox, wireframe or visual design generation, website generation, Figma, autonomous agents, collaboration, login/accounts, billing, or pgvector embeddings. The rule-based extractor remains deliberately narrow. Deployments must provide a trusted host `ActorContext` adapter and protect its injection boundary; there is no authentication system in this build.
+
+## BUILD 04 — Design Reasoning and Design Plans
+
+BUILD 04 adds the structured planning layer between project intent and future wireframes. It uses the exact current intent revision, a human-selected direction, current requirements, reviewed research evidence, active Design Laws, and unresolved high-impact questions. Source IDs are recorded in plan provenance and validated again before preview.
+
+```text
+Intent + Research + Requirements + Selected Direction
+        ↓
+Design Reasoning Context
+        ↓
+Design Plan Candidate
+        ↓
+Design Operation
+        ↓
+Validation
+        ↓
+Preview
+        ↓
+Human Approval
+        ↓
+Apply
+        ↓
+Version + Audit + Memory
+```
+
+The deterministic planner is for offline and test use; it is not presented as an LLM. Provider-generated output uses the BUILD 03 provider runtime and strict `DesignPlanOutput` schema. Malformed output remains quarantined. No proposal changes Design State or becomes approved without the shared `OperationExecutor`, an authorized human approval, and successful application. Research marked untrusted is excluded from reasoning and rejected if its trust changes before preview. Requirements and evidence are scoped to the current intent revision; prior revisions remain preserved.
+
+BUILD 04 endpoints:
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| POST | `/projects/{id}/design-plan/propose` | Generate a typed proposal candidate and AI Run without mutating Design State. |
+| POST | `/projects/{id}/design-plan/candidates/{candidate_id}/operation` | Convert a valid candidate into an AI Design Operation proposal. |
+| POST | `/projects/{id}/operations/{operation_id}/preview` | Validate source freshness and preview the proposed plan. |
+| POST | `/projects/{id}/operations/{operation_id}/approve` | Record explicit human approval or rejection. |
+| POST | `/projects/{id}/operations/{operation_id}/apply` | Apply an approved plan through the shared executor, creating version, audit, and memory records. |
+| GET | `/projects/{id}/design-plan` | Return the currently approved plan; returns 404 when none exists. |
+
+BUILD 04 does **not** generate wireframes, visual designs, React, websites, or Figma files. Those belong to later builds.

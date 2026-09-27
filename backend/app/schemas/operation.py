@@ -19,6 +19,8 @@ class OperationCreate(BaseModel):
     parent_operation_id: uuid.UUID | None = None
     intent_id: uuid.UUID | None = None
     ai_run_id: uuid.UUID | None = None
+    candidate_id: uuid.UUID | None = None
+    direction_id: uuid.UUID | None = None
     provenance: dict = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -46,6 +48,8 @@ class OperationRead(BaseModel):
     parent_operation_id: uuid.UUID | None
     intent_id: uuid.UUID | None = None
     ai_run_id: uuid.UUID | None = None
+    candidate_id: uuid.UUID | None = None
+    direction_id: uuid.UUID | None = None
     provenance: dict = Field(default_factory=dict)
     created_at: datetime
 

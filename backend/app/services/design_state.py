@@ -9,7 +9,7 @@ from app.models.project import Project
 from app.models.version import DesignVersion
 from app.services.versioning import create_version
 
-DEFAULT_STATE: dict[str, Any] = {"pages": [], "components": [], "design_tokens": {}, "ux_navigation": {}, "assets": [], "design_laws": [], "metadata": {}, "direction_selection": {}}
+DEFAULT_STATE: dict[str, Any] = {"pages": [], "components": [], "design_tokens": {}, "ux_navigation": {}, "assets": [], "design_laws": [], "metadata": {}, "direction_selection": {}, "design_plan": {}}
 
 def create_initial_design_state(db: Session, project_id: uuid.UUID) -> DesignState:
     """Create an empty state with the first recoverable version; idempotency conflicts are explicit."""

@@ -22,7 +22,7 @@ class RequirementService:
             provenance = {"source_type": "deterministic_inference" if generated else "user_submitted_inference", "source_id": str(intent_id) if generated and intent_id else None, "source_reference": "ProjectIntent" if generated else "requirement_api_payload", "created_by": "system" if generated else "user", "created_at": created_at}
         elif data.source == RequirementSource.RESEARCH:
             if not data.evidence_id: raise HTTPException(422, "evidence_id is required for a research-sourced requirement")
-            evidence = db.scalar(select(ResearchEvidence).where(ResearchEvidence.id == data.evidence_id, ResearchEvidence.project_id == project_id))
+            evidence = db.scalar(select(ResearchEvidence).where(ResearchEvidence.id == data.evidence_id, ResearchEvidence.project_id == project_id, ResearchEvidence.intent_id == intent_id))
             if not evidence: raise HTTPException(404, "Research evidence not found")
             provenance = {"source_type": "research", "source_id": str(evidence.id), "source_reference": evidence.source_url or "ResearchEvidence record", "created_by": "research", "created_at": created_at}
         else:
@@ -45,7 +45,7 @@ class RequirementService:
 
     def generate_from_intent(self, db: Session, project_id: uuid.UUID) -> list[DesignRequirement]:
         intent = IntentExtractionService.latest(db, project_id)
-        existing = {row.requirement for row in db.scalars(select(DesignRequirement).where(DesignRequirement.project_id == project_id))}
+        existing = {row.requirement for row in db.scalars(select(DesignRequirement).where(DesignRequirement.project_id == project_id, DesignRequirement.intent_id == intent.id))}
         field_sources = (intent.provenance or {}).get("field_sources", {})
         proposals: list[tuple[str, RequirementCategory, RequirementSource, str, float]] = []
         if intent.business_or_product_goal:

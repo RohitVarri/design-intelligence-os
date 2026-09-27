@@ -10,6 +10,7 @@ class TaskType(str, Enum):
     RESEARCH_QUERY = "research_query"
     RESEARCH_SYNTHESIS = "research_synthesis"
     PROPOSAL_GENERATION = "proposal_generation"
+    DESIGN_PLAN_GENERATION = "design_plan_generation"
 
 
 @dataclass(frozen=True)

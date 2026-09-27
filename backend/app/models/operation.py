@@ -15,11 +15,16 @@ def _values(items): return [item.value for item in items]
 
 class DesignOperation(Base):
     __tablename__ = "design_operations"
-    __table_args__ = (ForeignKeyConstraint(["project_id", "intent_id"], ["project_intents.project_id", "project_intents.id"], name="fk_design_operations_intent_revision"),)
+    __table_args__ = (
+        ForeignKeyConstraint(["project_id", "intent_id"], ["project_intents.project_id", "project_intents.id"], name="fk_design_operations_intent_revision"),
+        ForeignKeyConstraint(["project_id", "direction_id"], ["design_directions.project_id", "design_directions.id"], name="fk_design_operations_direction_project"),
+    )
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     intent_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("project_intents.id", ondelete="SET NULL"), index=True)
     ai_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("ai_runs.id", ondelete="SET NULL"), index=True)
+    candidate_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("ai_output_candidates.id", ondelete="SET NULL"), index=True)
+    direction_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("design_directions.id", ondelete="SET NULL"), index=True)
     operation_type: Mapped[OperationType] = mapped_column(SAEnum(OperationType, name="operation_type", values_callable=_values), nullable=False)
     actor: Mapped[OperationActor] = mapped_column(SAEnum(OperationActor, name="operation_actor", values_callable=_values), nullable=False)
     target: Mapped[str] = mapped_column(String(500), nullable=False)

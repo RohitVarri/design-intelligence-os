@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.models.decision import DecisionSource, DesignDecision
 from app.models.design_law import DesignLaw
 from app.models.project import Project
+from app.models.design_state import DesignState
 from app.models.version import DesignVersion
 from app.schemas.project import ProjectCreate, ProjectRead
 from app.schemas.design import DesignStateInput, DesignStateRead, DesignStateUpdate, SurgicalEdit
@@ -46,13 +47,17 @@ from app.core.actors import ActorContext, get_actor_context, require_mutation_ac
 from app.services.operation_executor import OperationExecutor
 from app.schemas.operation import OperationApprovalRequest, OperationPreviewRead
 from app.schemas.research import EvidenceReview
-from app.core.dependencies import get_provider_runtime, get_research_execution_service
+from app.core.dependencies import get_provider_runtime, get_research_execution_service, get_operation_executor
 from app.core.actors import ActorType
 from app.providers.contracts import TaskType
 from app.providers.runtime import ProviderRuntime
 from app.providers.schemas import IntentCandidateOutput, QuestionCandidatesOutput, DesignProposalOutput
 from app.models.research_run import ResearchRun
 from app.services.research_execution import ResearchExecutionService
+from app.schemas.design_plan import DesignPlanCandidateResponse, DesignPlanRead
+from app.models.design_plan import DesignPlan, DesignPlanStatus
+from app.services.design_reasoning import DesignReasoningService
+from app.services.design_plan_workflow import DesignPlanWorkflow
 
 router = APIRouter()
 
@@ -365,5 +370,40 @@ def apply_operation(project_id: uuid.UUID, operation_id: uuid.UUID, db: Session 
         db.commit()
         raise
     db.commit(); db.refresh(result); return result
+
+
+@router.post("/projects/{project_id}/design-plan/propose", response_model=DesignPlanCandidateResponse)
+def propose_design_plan(project_id: uuid.UUID, db: Session = Depends(get_db), runtime: ProviderRuntime = Depends(get_provider_runtime), actor: ActorContext = Depends(get_actor_context)):
+    _project(db, project_id)
+    result = DesignPlanWorkflow().propose(db, project_id, runtime)
+    db.commit()
+    return result
+
+
+@router.post("/projects/{project_id}/design-plan/candidates/{candidate_id}/operation", response_model=OperationRead, status_code=201)
+def propose_design_plan_operation(project_id: uuid.UUID, candidate_id: uuid.UUID, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context), executor: OperationExecutor = Depends(get_operation_executor)):
+    _project(db, project_id)
+    operation = DesignPlanWorkflow().create_operation(db, project_id, candidate_id, actor, executor)
+    db.commit(); db.refresh(operation)
+    return operation
+
+
+@router.get("/projects/{project_id}/design-plan", response_model=DesignPlanRead)
+def read_design_plan(project_id: uuid.UUID, db: Session = Depends(get_db)):
+    state = db.get(DesignState, project_id)
+    if not state:
+        raise HTTPException(404, "Design Plan not found")
+    stored = (state.state or {}).get("design_plan") or {}
+    record_id = stored.get("record_id")
+    if not record_id:
+        raise HTTPException(404, "Design Plan not found")
+    try:
+        plan_id = uuid.UUID(str(record_id))
+    except ValueError as exc:
+        raise HTTPException(404, "Design Plan not found") from exc
+    plan = db.scalar(select(DesignPlan).where(DesignPlan.id == plan_id, DesignPlan.project_id == project_id, DesignPlan.status == DesignPlanStatus.APPROVED))
+    if plan is None:
+        raise HTTPException(404, "Design Plan not found")
+    return plan
 
 _guard_write_routes()
