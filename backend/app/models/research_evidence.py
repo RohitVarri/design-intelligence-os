@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 from enum import Enum
-from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, Float, JSON, String, Text, Uuid, func
+from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, Float, JSON, String, Text, Uuid, func, ForeignKeyConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
@@ -15,15 +15,17 @@ class EvidenceSourceType(str, Enum):
 class TrendStage(str, Enum):
     EMERGING="emerging"; ESTABLISHED="established"; SATURATED="saturated"; DECLINING="declining"; ARCHIVED="archived"; UNKNOWN="unknown"
 class EvidenceTrust(str, Enum):
-    AUTHORITATIVE="authoritative"; RELIABLE="reliable"; INFORMATIONAL="informational"; EXPERIMENTAL="experimental"; UNTRUSTED="untrusted"
+    AUTHORITATIVE="authoritative"; RELIABLE="reliable"; INFORMATIONAL="informational"; EXPERIMENTAL="experimental"; REVIEWED="reviewed"; UNTRUSTED="untrusted"
 def _values(items): return [item.value for item in items]
 
 class ResearchEvidence(Base):
     """A traceable research claim; evidence does not become an instruction by itself."""
     __tablename__ = "research_evidence"
+    __table_args__ = (ForeignKeyConstraint(["project_id", "intent_id"], ["project_intents.project_id", "project_intents.id"], name="fk_research_evidence_intent_revision"),)
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     intent_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("project_intents.id", ondelete="SET NULL"), index=True)
+    result_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("research_results.id", ondelete="SET NULL"), index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     claim: Mapped[str] = mapped_column(Text, nullable=False)
     source_url: Mapped[str | None] = mapped_column(Text)

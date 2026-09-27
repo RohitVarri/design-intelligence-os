@@ -13,6 +13,7 @@ class DesignStateInput(BaseModel):
     assets: list[dict[str, Any]] = Field(default_factory=list)
     design_laws: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    direction_selection: dict[str, Any] = Field(default_factory=dict)
 
 class DesignStateRead(ORMModel):
     project_id: uuid.UUID

@@ -6,18 +6,13 @@ from sqlalchemy.orm import Session
 from app.models.operation import DesignOperation, OperationActor, OperationStatus, OperationSource, OperationType
 from app.models.project import Project
 from app.schemas.operation import OperationCreate
+from app.core.actors import ActorContext
+from app.services.operation_executor import OperationExecutor
 
 class OperationService:
-    def create_proposal(self, db: Session, project_id: uuid.UUID, data: OperationCreate) -> DesignOperation:
-        if not db.get(Project, project_id): raise HTTPException(404, "Project not found")
-        if data.status != OperationStatus.PROPOSED:
-            raise HTTPException(422, "Only proposed operations can be submitted; validation and application are not implemented in BUILD 02")
-        if data.actor == OperationActor.AI and data.source != OperationSource.AI_PROPOSAL:
-            raise HTTPException(422, "AI operation source must be ai_proposal")
-        values = data.model_dump()
-        values["status"] = OperationStatus.PROPOSED
-        operation = DesignOperation(project_id=project_id, **values)
-        db.add(operation); db.flush(); return operation
+    def create_proposal(self, db: Session, project_id: uuid.UUID, data: OperationCreate, actor: ActorContext, executor: OperationExecutor | None = None) -> DesignOperation:
+        executor = executor or OperationExecutor()
+        return executor.propose(db, project_id, data, actor)
 
     def record_human_selection(self, db: Session, project_id: uuid.UUID, direction_id: uuid.UUID, direction_name: str, previous_status: str) -> DesignOperation:
         """Record the user's explicit direction choice as the applied operation event."""

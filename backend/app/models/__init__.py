@@ -15,5 +15,9 @@ from app.models.requirement import DesignRequirement
 from app.models.direction import DesignDirection
 from app.models.direction_assessment import DesignDirectionAssessment
 from app.models.operation import DesignOperation
+from app.models.ai_run import AIRun
+from app.models.ai_candidate import AIOutputCandidate
+from app.models.research_run import ResearchRun, ResearchAttempt, ResearchResult
+from app.models.operation_records import OperationPreview, OperationApproval, AuditEvent
 
-__all__ = ["Project", "DesignState", "DesignVersion", "DesignDecision", "DesignLaw", "DesignMemory", "ProjectIntent", "Question", "ResearchEvidence", "ResearchPlan", "ResearchQuery", "DesignRequirement", "DesignDirection", "DesignDirectionAssessment", "DesignOperation"]
+__all__ = ["Project", "DesignState", "DesignVersion", "DesignDecision", "DesignLaw", "DesignMemory", "ProjectIntent", "Question", "ResearchEvidence", "ResearchPlan", "ResearchQuery", "DesignRequirement", "DesignDirection", "DesignDirectionAssessment", "DesignOperation", "AIRun", "AIOutputCandidate", "ResearchRun", "ResearchAttempt", "ResearchResult", "OperationPreview", "OperationApproval", "AuditEvent"]

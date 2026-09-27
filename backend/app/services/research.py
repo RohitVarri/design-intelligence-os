@@ -80,11 +80,18 @@ class ResearchService:
         intent = IntentExtractionService.latest(db, project_id)
         evidence_id = uuid.uuid4()
         provenance = {"source_type": "user_provided_research", "source_id": str(evidence_id), "source_reference": data.source_url or data.source_name or "user_submitted_evidence", "created_by": "user", "created_at": datetime.now(timezone.utc).isoformat()}
-        trust = data.trust
-        if data.source_type.value == "user_reference" or (data.source_type.value == "other" and data.trust == EvidenceTrust.UNTRUSTED):
-            trust = EvidenceTrust.UNTRUSTED
-        obj = ResearchEvidence(id=evidence_id, project_id=project_id, intent_id=intent.id, trust=trust,
-            provenance=provenance, **data.model_dump(exclude={"trust"}))
+        provenance["trust_reason"] = "External and user-submitted evidence is untrusted until server verification or human review."
+        obj = ResearchEvidence(id=evidence_id, project_id=project_id, intent_id=intent.id, trust=EvidenceTrust.UNTRUSTED,
+            provenance=provenance, **data.model_dump())
         db.add(obj); db.flush(); return obj
+
+    def review_evidence(self, db: Session, project_id: uuid.UUID, evidence_id: uuid.UUID, *, eligible: bool, rationale: str, reviewer_id: str) -> ResearchEvidence:
+        """Apply an auditable human trust transition; request payload cannot set trust directly."""
+        row = db.scalar(select(ResearchEvidence).where(ResearchEvidence.project_id == project_id, ResearchEvidence.id == evidence_id))
+        if not row: raise HTTPException(404, "Research evidence not found")
+        row.trust = EvidenceTrust.REVIEWED if eligible else EvidenceTrust.UNTRUSTED
+        row.provenance = {**(row.provenance or {}), "review": {"reviewer_id": reviewer_id, "eligible": eligible, "rationale": rationale, "reviewed_at": datetime.now(timezone.utc).isoformat()}}
+        db.flush()
+        return row
 
 research_service = ResearchService()

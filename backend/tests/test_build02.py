@@ -156,11 +156,11 @@ def test_research_evidence_defaults_to_untrusted_and_has_provenance(client):
     assert client.get(f"/api/v1/projects/{pid}/research").json()[0]["id"] == data["id"]
 
 
-def test_research_evidence_can_be_explicitly_labeled_reliable(client):
+def test_client_cannot_assign_research_evidence_trust(client):
     pid = project(client)
     intent(client, pid)
     response = client.post(f"/api/v1/projects/{pid}/research", json={"title":"Standard", "claim":"A test claim", "source_type":"accessibility_standard", "evidence":"A relevant passage", "trust":"authoritative", "confidence":0.9})
-    assert response.status_code == 201 and response.json()["trust"] == "authoritative"
+    assert response.status_code == 201 and response.json()["trust"] == "untrusted"
 
 
 def test_requirement_sources_and_provenance_are_distinct(client):
@@ -219,12 +219,14 @@ def test_direction_hypotheses_reference_reliable_research_without_auto_promoting
     pid = project(client)
     direction_ready_intent(client, pid)
     evidence = client.post(f"/api/v1/projects/{pid}/research", json={"title":"Research note", "claim":"A study claim", "source_type":"research_paper", "evidence":"Evidence text", "trust":"reliable", "relevance":0.9}).json()
+    reviewed = client.post(f"/api/v1/projects/{pid}/research/{evidence['id']}/review", json={"eligible":True,"rationale":"Reviewed for this project"})
+    assert reviewed.status_code == 200 and reviewed.json()["trust"] == "reviewed"
     generated = client.post(f"/api/v1/projects/{pid}/directions", json={"generate":True})
     assert generated.status_code == 201
     direction = generated.json()[0]
     assert evidence["id"] in direction["supporting_research_ids"]
     assert direction["status"] == "proposed"
-    assert direction["visual_language"]["research_context"][0]["trust"] == "reliable"
+    assert direction["visual_language"]["research_context"][0]["trust"] == "reviewed"
 
 
 def test_manual_direction_creation_is_proposed(client):

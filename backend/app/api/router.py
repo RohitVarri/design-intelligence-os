@@ -1,10 +1,11 @@
 """Versioned API routes for BUILD 01."""
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.dependencies.utils import get_parameterless_sub_dependant
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.models.decision import DesignDecision
+from app.models.decision import DecisionSource, DesignDecision
 from app.models.design_law import DesignLaw
 from app.models.project import Project
 from app.models.version import DesignVersion
@@ -41,8 +42,29 @@ from app.services.research import research_service
 from app.services.requirements import requirement_service
 from app.services.directions import direction_service
 from app.services.operations import operation_service
+from app.core.actors import ActorContext, get_actor_context, require_mutation_actor
+from app.services.operation_executor import OperationExecutor
+from app.schemas.operation import OperationApprovalRequest, OperationPreviewRead
+from app.schemas.research import EvidenceReview
+from app.core.dependencies import get_provider_runtime, get_research_execution_service
+from app.core.actors import ActorType
+from app.providers.contracts import TaskType
+from app.providers.runtime import ProviderRuntime
+from app.providers.schemas import IntentCandidateOutput, QuestionCandidatesOutput, DesignProposalOutput
+from app.models.research_run import ResearchRun
+from app.services.research_execution import ResearchExecutionService
 
 router = APIRouter()
+
+# Every write route receives trusted identity from the host adapter. Client body fields
+# cannot turn an anonymous/AI caller into an authorized user.
+def _guard_write_routes() -> None:
+    for route in router.routes:
+        if getattr(route, "methods", set()) & {"POST", "PUT", "PATCH", "DELETE"}:
+            if route.path.endswith("/preview"):
+                continue
+            route.dependencies.append(Depends(require_mutation_actor))
+            route.dependant.dependencies.append(get_parameterless_sub_dependant(depends=Depends(require_mutation_actor), path=route.path))
 
 def _project(db: Session, project_id: uuid.UUID) -> Project:
     project = db.get(Project, project_id)
@@ -70,15 +92,21 @@ def read_design(project_id: uuid.UUID, db: Session = Depends(get_db)):
     _project(db, project_id); return get_design_state(db, project_id)
 
 @router.put("/projects/{project_id}/design", response_model=DesignStateRead)
-def put_design(project_id: uuid.UUID, data: DesignStateUpdate, db: Session = Depends(get_db)):
+def put_design(project_id: uuid.UUID, data: DesignStateUpdate, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context)):
     _project(db, project_id)
-    obj = update_design_state(db, project_id, data.state.model_dump(), data.change_summary)
+    operation = OperationCreate(operation_type="replace", target="*", new_value=data.state.model_dump(mode="json"),
+        reason=data.change_summary, intent_id=_project(db, project_id).current_intent_id)
+    OperationExecutor().execute_confirmed_user_request(db, project_id, operation, actor)
+    obj = get_design_state(db, project_id)
     db.commit(); db.refresh(obj); return obj
 
 @router.patch("/projects/{project_id}/design/edit", response_model=DesignStateRead)
-def patch_design(project_id: uuid.UUID, data: SurgicalEdit, db: Session = Depends(get_db)):
+def patch_design(project_id: uuid.UUID, data: SurgicalEdit, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context)):
     _project(db, project_id)
-    obj = surgical_edit(db, project_id, data.path, data.value, data.change_summary)
+    operation = OperationCreate(operation_type="update", target=data.path, property=data.path, new_value=data.value,
+        reason=data.change_summary, intent_id=_project(db, project_id).current_intent_id)
+    OperationExecutor().execute_confirmed_user_request(db, project_id, operation, actor)
+    obj = get_design_state(db, project_id)
     db.commit(); db.refresh(obj); return obj
 
 @router.get("/projects/{project_id}/versions", response_model=list[VersionRead])
@@ -96,12 +124,17 @@ def compare_version_route(project_id: uuid.UUID, left_id: uuid.UUID, right_id: u
     return {"from_version": left, "to_version": right, "changes": compare_versions(left, right)}
 
 @router.post("/projects/{project_id}/versions/{version_id}/restore", response_model=DesignStateRead)
-def restore_version_route(project_id: uuid.UUID, version_id: uuid.UUID, db: Session = Depends(get_db)):
-    version = get_version(db, project_id, version_id); obj = restore_version(db, project_id, version)
+def restore_version_route(project_id: uuid.UUID, version_id: uuid.UUID, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context)):
+    version = get_version(db, project_id, version_id)
+    operation = OperationCreate(operation_type="replace", target="*", new_value=version.state,
+        reason=f"Restored from version {version.version_number}", intent_id=_project(db, project_id).current_intent_id)
+    OperationExecutor().execute_confirmed_user_request(db, project_id, operation, actor)
+    obj = get_design_state(db, project_id)
     db.commit(); db.refresh(obj); return obj
 
 @router.post("/projects/{project_id}/decisions", response_model=DecisionRead, status_code=201)
 def post_decision(project_id: uuid.UUID, data: DecisionCreate, db: Session = Depends(get_db)):
+    data = data.model_copy(update={"source": DecisionSource.USER, "provenance": {**data.provenance, "source_type":"user_decision"}})
     obj = record_decision(db, project_id, data); db.commit(); db.refresh(obj); return obj
 
 @router.get("/projects/{project_id}/decisions", response_model=list[DecisionRead])
@@ -154,6 +187,16 @@ def analyze_intent(project_id: uuid.UUID, db: Session = Depends(get_db)):
     db.commit(); db.refresh(obj)
     return {"intent": obj, "missing_information": missing, "generated_questions": len(questions)}
 
+@router.post("/projects/{project_id}/intent/ai-candidate")
+def ai_intent_candidate(project_id: uuid.UUID, db: Session = Depends(get_db), runtime: ProviderRuntime = Depends(get_provider_runtime), actor: ActorContext = Depends(get_actor_context)):
+    intent = intent_extraction.latest(db, project_id)
+    result = runtime.execute_sync(db, project_id=project_id, intent_id=intent.id, task=TaskType.INTENT_EXTRACTION,
+        payload={"raw_request":intent.raw_request, "current_fields":{key:getattr(intent,key) for key in ("project_type","business_or_product_goal","primary_audience","desired_user_action","platform")}},
+        output_schema=IntentCandidateOutput, actor=ActorContext(ActorType.AI, actor_id="provider-runtime", trusted=True), context_references={"intent_revision_id":str(intent.id)})
+    db.commit()
+    return {"run_id":result.run.id, "status":result.run.status.value, "candidate_id":result.candidate.id if result.candidate else None,
+            "candidate":result.candidate.payload if result.candidate else None, "accepted":result.accepted}
+
 @router.get("/projects/{project_id}/questions", response_model=list[QuestionRead])
 def get_questions(project_id: uuid.UUID, db: Session = Depends(get_db)):
     return question_service.list_for_project(db, project_id)
@@ -176,6 +219,17 @@ def answer_question(project_id: uuid.UUID, question_id: uuid.UUID, data: Questio
     obj = question_service.answer(db, project_id, question_id, data.answer)
     db.commit(); db.refresh(obj); return obj
 
+@router.post("/projects/{project_id}/questions/ai-candidate")
+def ai_question_candidate(project_id: uuid.UUID, db: Session = Depends(get_db), runtime: ProviderRuntime = Depends(get_provider_runtime), actor: ActorContext = Depends(get_actor_context)):
+    intent = intent_extraction.latest(db, project_id)
+    result = runtime.execute_sync(db, project_id=project_id, intent_id=intent.id, task=TaskType.QUESTION_GENERATION,
+        payload={"intent":{key:getattr(intent,key) for key in ("raw_request","project_type","business_or_product_goal","primary_audience","desired_user_action","platform")},
+                 "existing_open_questions":[q.question_text for q in question_service.list_for_project(db, project_id, open_only=True)]},
+        output_schema=QuestionCandidatesOutput, actor=ActorContext(ActorType.AI, actor_id="provider-runtime", trusted=True), context_references={"intent_revision_id":str(intent.id)})
+    db.commit()
+    return {"run_id":result.run.id, "status":result.run.status.value, "candidate_id":result.candidate.id if result.candidate else None,
+            "candidate":result.candidate.payload if result.candidate else None, "accepted":result.accepted}
+
 # BUILD 02: research evidence is persisted with provenance and a trust label; no live search runs.
 @router.get("/projects/{project_id}/research", response_model=list[ResearchEvidenceRead])
 def get_research(project_id: uuid.UUID, db: Session = Depends(get_db)):
@@ -184,6 +238,13 @@ def get_research(project_id: uuid.UUID, db: Session = Depends(get_db)):
 @router.post("/projects/{project_id}/research", response_model=ResearchEvidenceRead, status_code=201)
 def post_research(project_id: uuid.UUID, data: ResearchEvidenceCreate, db: Session = Depends(get_db)):
     obj = research_service.store_evidence(db, project_id, data); db.commit(); db.refresh(obj); return obj
+
+@router.post("/projects/{project_id}/research/{evidence_id}/review", response_model=ResearchEvidenceRead)
+def review_research(project_id: uuid.UUID, evidence_id: uuid.UUID, data: EvidenceReview, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context)):
+    if actor.actor_type is None or actor.actor_type.value != "user" or not actor.trusted:
+        raise HTTPException(403, "Only a trusted user may review external evidence")
+    item = research_service.review_evidence(db, project_id, evidence_id, eligible=data.eligible, rationale=data.rationale, reviewer_id=actor.actor_id or "trusted-user")
+    db.commit(); db.refresh(item); return item
 
 def _plan_payload(db: Session, plan: ResearchPlan):
     queries = list(db.scalars(select(ResearchQuery).where(ResearchQuery.plan_id == plan.id).order_by(ResearchQuery.created_at)))
@@ -197,6 +258,24 @@ def get_research_plan(project_id: uuid.UUID, db: Session = Depends(get_db)):
 @router.post("/projects/{project_id}/research-plan", response_model=ResearchPlanRead, status_code=201)
 def post_research_plan(project_id: uuid.UUID, db: Session = Depends(get_db)):
     plan = research_service.create_plan(db, project_id); db.commit(); db.refresh(plan); return _plan_payload(db, plan)
+
+@router.post("/projects/{project_id}/research-plan/{plan_id}/execute")
+def execute_research_plan(project_id: uuid.UUID, plan_id: uuid.UUID, db: Session = Depends(get_db), runtime: ProviderRuntime = Depends(get_provider_runtime), service: ResearchExecutionService = Depends(get_research_execution_service), actor: ActorContext = Depends(get_actor_context)):
+    run = service.execute_plan(db, project_id, plan_id, runtime, ActorContext(ActorType.AI, actor_id="provider-runtime", trusted=True))
+    db.commit(); db.refresh(run)
+    return {"id":run.id,"status":run.status.value,"intent_id":run.intent_id,"started_at":run.started_at,"completed_at":run.completed_at}
+
+@router.post("/projects/{project_id}/design/ai-candidate")
+def ai_design_candidate(project_id: uuid.UUID, request: dict, db: Session = Depends(get_db), runtime: ProviderRuntime = Depends(get_provider_runtime), actor: ActorContext = Depends(get_actor_context)):
+    project = _project(db, project_id)
+    state = get_design_state(db, project_id)
+    result = runtime.execute_sync(db, project_id=project_id, intent_id=project.current_intent_id, task=TaskType.PROPOSAL_GENERATION,
+        payload={"request":request,"design_state":state.state if state else {}}, output_schema=DesignProposalOutput,
+        actor=ActorContext(ActorType.AI, actor_id="provider-runtime", trusted=True),
+        context_references={"intent_revision_id":str(project.current_intent_id) if project.current_intent_id else None,"current_version_id":str(state.current_version_id) if state and state.current_version_id else None})
+    db.commit()
+    return {"run_id":result.run.id,"status":result.run.status.value,"candidate_id":result.candidate.id if result.candidate else None,
+            "candidate":result.candidate.payload if result.candidate else None,"accepted":result.accepted}
 
 # BUILD 02: requirements preserve user, inference, research, and system source.
 @router.get("/projects/{project_id}/requirements", response_model=list[RequirementRead])
@@ -230,8 +309,8 @@ def get_direction(project_id: uuid.UUID, direction_id: uuid.UUID, db: Session = 
     _project(db, project_id); return direction_service.get(db, project_id, direction_id)
 
 @router.post("/projects/{project_id}/directions/{direction_id}/select", response_model=DirectionRead)
-def select_direction(project_id: uuid.UUID, direction_id: uuid.UUID, data: DirectionSelection, db: Session = Depends(get_db)):
-    obj = direction_service.select(db, project_id, direction_id); db.commit(); db.refresh(obj); return obj
+def select_direction(project_id: uuid.UUID, direction_id: uuid.UUID, data: DirectionSelection, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context)):
+    obj = direction_service.select(db, project_id, direction_id, actor, OperationExecutor()); db.commit(); db.refresh(obj); return obj
 
 @router.patch("/projects/{project_id}/directions/{direction_id}", response_model=DirectionRead)
 def patch_direction(project_id: uuid.UUID, direction_id: uuid.UUID, data: DirectionStatusUpdate, db: Session = Depends(get_db)):
@@ -251,5 +330,40 @@ def get_operations(project_id: uuid.UUID, db: Session = Depends(get_db)):
     return operation_service.list(db, project_id)
 
 @router.post("/projects/{project_id}/operations", response_model=OperationRead, status_code=201)
-def post_operation(project_id: uuid.UUID, data: OperationCreate, db: Session = Depends(get_db)):
-    obj = operation_service.create_proposal(db, project_id, data); db.commit(); db.refresh(obj); return obj
+def post_operation(project_id: uuid.UUID, data: OperationCreate, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context)):
+    obj = operation_service.create_proposal(db, project_id, data, actor); db.commit(); db.refresh(obj); return obj
+
+@router.post("/projects/{project_id}/operations/{operation_id}/preview", response_model=OperationPreviewRead)
+def preview_operation(project_id: uuid.UUID, operation_id: uuid.UUID, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context)):
+    operation = db.get(DesignOperation, operation_id)
+    if not operation or operation.project_id != project_id: raise HTTPException(404, "Operation not found")
+    executor = OperationExecutor()
+    try:
+        preview = executor.preview(db, operation_id, actor)
+    except HTTPException as exc:
+        executor.reject(db, operation, actor, exc.detail)
+        db.commit()
+        raise
+    db.commit(); db.refresh(preview); return preview
+
+@router.post("/projects/{project_id}/operations/{operation_id}/approve")
+def approve_operation(project_id: uuid.UUID, operation_id: uuid.UUID, data: OperationApprovalRequest, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context)):
+    operation = db.get(DesignOperation, operation_id)
+    if not operation or operation.project_id != project_id: raise HTTPException(404, "Operation not found")
+    approval = OperationExecutor().approve(db, operation_id, data.preview_id, actor, data.approved); db.commit(); db.refresh(approval); return approval
+
+@router.post("/projects/{project_id}/operations/{operation_id}/apply", response_model=OperationRead)
+def apply_operation(project_id: uuid.UUID, operation_id: uuid.UUID, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context)):
+    operation = db.get(DesignOperation, operation_id)
+    if not operation or operation.project_id != project_id: raise HTTPException(404, "Operation not found")
+    executor = OperationExecutor()
+    try:
+        with db.begin_nested():
+            result = executor.apply(db, operation_id, actor)
+    except HTTPException as exc:
+        executor.reject(db, operation, actor, exc.detail)
+        db.commit()
+        raise
+    db.commit(); db.refresh(result); return result
+
+_guard_write_routes()

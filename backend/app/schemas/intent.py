@@ -33,12 +33,14 @@ class IntentUpdate(BaseModel):
     success_criteria: list[str] | None = None
     budget_or_resource_constraints: str | None = None
     timeline_constraints: str | None = None
-    status: IntentStatus | None = None
 
 class IntentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     project_id: uuid.UUID
+    revision_number: int = 1
+    created_by: str = "user"
+    superseded_by_id: uuid.UUID | None = None
     raw_request: str
     project_type: str | None
     business_or_product_goal: str | None

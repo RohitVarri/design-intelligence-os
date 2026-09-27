@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 from enum import Enum
-from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, Float, JSON, String, Text, Uuid, func
+from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, Float, JSON, String, Text, Uuid, func, ForeignKeyConstraint, Index, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
@@ -12,6 +12,8 @@ def _values(items): return [item.value for item in items]
 
 class DesignDirection(Base):
     __tablename__ = "design_directions"
+    __table_args__ = (ForeignKeyConstraint(["project_id", "intent_id"], ["project_intents.project_id", "project_intents.id"], name="fk_design_directions_intent_revision"),
+                      Index("uq_direction_one_selected_per_project", "project_id", unique=True, postgresql_where=text("status = 'selected'"), sqlite_where=text("status = 'selected'")))
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     intent_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("project_intents.id", ondelete="CASCADE"), nullable=False, index=True)

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Protocol
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from app.models.intent import IntentStatus, ProjectIntent
 from app.models.project import Project
@@ -12,7 +12,7 @@ from app.models.question import Question, QuestionStatus
 from app.schemas.intent import IntentCreate, IntentUpdate
 
 REQUIRED_COMPLETENESS_FIELDS = ("raw_request", "project_type", "business_or_product_goal", "primary_audience", "desired_user_action", "platform")
-BLOCKING_FIELDS = ("project_type", "business_or_product_goal", "primary_audience", "desired_user_action")
+BLOCKING_FIELDS = REQUIRED_COMPLETENESS_FIELDS[1:]
 LIST_FIELDS = {"primary_user_tasks", "target_devices", "required_pages", "required_features", "content_requirements", "brand_requirements", "visual_preferences", "functional_requirements", "technical_requirements", "accessibility_requirements", "performance_requirements", "constraints", "references", "competitors", "success_criteria"}
 
 class IntentExtractor(Protocol):
@@ -106,21 +106,42 @@ class IntentExtractionService:
         self.extractor = extractor or RuleBasedIntentExtractor()
 
     @staticmethod
+    def transition_status(intent: ProjectIntent, target: IntentStatus, *, actor: str, reason: str) -> None:
+        """Apply a permitted intent lifecycle transition and retain its provenance."""
+        allowed = {
+            IntentStatus.DRAFT: {IntentStatus.NEEDS_QUESTIONS, IntentStatus.READY_FOR_RESEARCH},
+            IntentStatus.NEEDS_QUESTIONS: {IntentStatus.READY_FOR_RESEARCH},
+            IntentStatus.READY_FOR_RESEARCH: {IntentStatus.RESEARCHED, IntentStatus.READY_FOR_DIRECTION},
+            IntentStatus.RESEARCHED: {IntentStatus.READY_FOR_DIRECTION},
+            IntentStatus.READY_FOR_DIRECTION: {IntentStatus.APPROVED},
+            IntentStatus.APPROVED: set(),
+        }
+        if target == intent.status:
+            return
+        if target not in allowed[intent.status]:
+            raise HTTPException(409, f"Invalid intent lifecycle transition: {intent.status.value} -> {target.value}")
+        history = list((intent.provenance or {}).get("lifecycle", []))
+        history.append({"from":intent.status.value,"to":target.value,"actor":actor,"reason":reason,"at":datetime.now(timezone.utc).isoformat()})
+        intent.provenance = {**(intent.provenance or {}), "lifecycle":history}
+        intent.status = target
+
+    @staticmethod
     def missing_information(intent: ProjectIntent) -> list[str]:
-        labels = {"project_type": "project type", "business_or_product_goal": "business or product goal", "primary_audience": "primary audience", "desired_user_action": "desired user action"}
+        labels = {"project_type": "project type", "business_or_product_goal": "business or product goal", "primary_audience": "primary audience", "desired_user_action": "desired user action", "platform": "platform"}
         sources = (intent.provenance or {}).get("field_sources", {})
-        return [label for field, label in labels.items() if not getattr(intent, field) or sources.get(field, {}).get("source_type") == "inferred"]
+        return [label for field, label in labels.items() if not getattr(intent, field) or sources.get(field, {}).get("source_type") in {"inferred", "ai_proposal", "research"}]
 
     @staticmethod
     def refresh_metrics(intent: ProjectIntent) -> None:
         sources = (intent.provenance or {}).get("field_sources", {})
-        known = sum(1 for field in REQUIRED_COMPLETENESS_FIELDS if getattr(intent, field, None) and (field == "raw_request" or sources.get(field, {}).get("source_type") != "inferred"))
+        known = sum(1 for field in REQUIRED_COMPLETENESS_FIELDS if getattr(intent, field, None) and (field == "raw_request" or sources.get(field, {}).get("source_type") not in {"inferred", "ai_proposal", "research"}))
         intent.completeness = round(known / len(REQUIRED_COMPLETENESS_FIELDS), 3)
         sources = intent.provenance.get("field_sources", {}) if intent.provenance else {}
         scores = [info.get("confidence", 0.0) for key, info in sources.items() if key != "raw_request" and getattr(intent, key, None)]
         intent.confidence = round(sum(scores) / len(scores), 3) if scores else 0.0
         if intent.status not in (IntentStatus.APPROVED, IntentStatus.RESEARCHED, IntentStatus.READY_FOR_DIRECTION):
-            intent.status = IntentStatus.NEEDS_QUESTIONS if IntentExtractionService.missing_information(intent) else IntentStatus.READY_FOR_RESEARCH
+            target = IntentStatus.NEEDS_QUESTIONS if IntentExtractionService.missing_information(intent) else IntentStatus.READY_FOR_RESEARCH
+            IntentExtractionService.transition_status(intent, target, actor="system", reason="Completeness policy evaluated current field provenance")
 
     def apply_extraction(self, intent: ProjectIntent) -> ProjectIntent:
         values, scores = self.extractor.extract(intent.raw_request)
@@ -136,51 +157,126 @@ class IntentExtractionService:
         self.refresh_metrics(intent)
         return intent
 
-    def create(self, db: Session, project_id: uuid.UUID, data: IntentCreate) -> ProjectIntent:
-        if not db.get(Project, project_id): raise HTTPException(404, "Project not found")
-        old_intents = db.scalars(select(ProjectIntent).where(ProjectIntent.project_id == project_id)).all()
-        if old_intents:
-            old_ids = [item.id for item in old_intents]
-            stale = db.scalars(select(Question).where(Question.intent_id.in_(old_ids), Question.status == QuestionStatus.OPEN)).all()
+    @staticmethod
+    def _copy_values(intent: ProjectIntent) -> dict:
+        keys = ("raw_request", "project_type", "business_or_product_goal", "primary_audience", "secondary_audience", "primary_user_tasks", "desired_user_action", "industry", "platform", "target_devices", "required_pages", "required_features", "content_requirements", "brand_requirements", "visual_preferences", "functional_requirements", "technical_requirements", "accessibility_requirements", "performance_requirements", "constraints", "references", "competitors", "success_criteria", "budget_or_resource_constraints", "timeline_constraints", "confidence", "completeness", "provenance", "status")
+        return {key: getattr(intent, key) for key in keys}
+
+    def _make_revision(self, db: Session, project_id: uuid.UUID, values: dict, *, created_by: str) -> ProjectIntent:
+        project = db.scalar(select(Project).where(Project.id == project_id).with_for_update())
+        if not project: raise HTTPException(404, "Project not found")
+        current = self.latest(db, project_id, required=False)
+        if project.current_intent_id and (current is None or project.current_intent_id != current.id):
+            raise HTTPException(409, "Intent changed while this revision was being prepared")
+        number = (db.scalar(select(func.max(ProjectIntent.revision_number)).where(ProjectIntent.project_id == project_id)) or 0) + 1
+        revision_id = uuid.uuid4()
+        revision = ProjectIntent(id=revision_id, project_id=project_id, revision_number=number, created_by=created_by, **values)
+        revision.status = IntentStatus.DRAFT
+        db.add(revision); db.flush()
+        if current:
+            current.superseded_by_id = revision_id
+            stale = db.scalars(select(Question).where(Question.intent_id == current.id, Question.status == QuestionStatus.OPEN)).all()
             for question in stale: question.status = QuestionStatus.SUPERSEDED
+        project.current_intent_id = revision_id
+        db.flush()
+        return revision
+
+    def create(self, db: Session, project_id: uuid.UUID, data: IntentCreate) -> ProjectIntent:
+        project = db.scalar(select(Project).where(Project.id == project_id).with_for_update())
+        if not project: raise HTTPException(404, "Project not found")
         intent_id = uuid.uuid4()
         stamp = datetime.now(timezone.utc).isoformat()
-        intent = ProjectIntent(id=intent_id, project_id=project_id, raw_request=data.raw_request.strip(), status=IntentStatus.DRAFT,
+        intent = ProjectIntent(id=intent_id, project_id=project_id, revision_number=1, created_by="user", raw_request=data.raw_request.strip(), status=IntentStatus.DRAFT,
             provenance={"source_type": "user_request", "source_id": str(intent_id), "source_reference": "raw_request", "created_by": "user", "created_at": stamp,
                 "field_sources": {"raw_request": {"source_type": "user_request", "source_id": str(intent_id), "source_reference": "raw_request", "created_by": "user", "confidence": 1.0}}})
+        current = self.latest(db, project_id, required=False)
+        if current:
+            intent.revision_number = (db.scalar(select(func.max(ProjectIntent.revision_number)).where(ProjectIntent.project_id == project_id)) or 0) + 1
         db.add(intent); db.flush()
+        if current:
+            current.superseded_by_id = intent.id
+            stale = db.scalars(select(Question).where(Question.intent_id == current.id, Question.status == QuestionStatus.OPEN)).all()
+            for question in stale: question.status = QuestionStatus.SUPERSEDED
+        project.current_intent_id = intent.id
         return self.apply_extraction(intent)
 
     @staticmethod
-    def latest(db: Session, project_id: uuid.UUID) -> ProjectIntent:
+    def latest(db: Session, project_id: uuid.UUID, required: bool = True) -> ProjectIntent | None:
+        project = db.get(Project, project_id)
+        if not project:
+            if required: raise HTTPException(404, "Project not found")
+            return None
+        if project.current_intent_id:
+            current = db.scalar(select(ProjectIntent).where(ProjectIntent.id == project.current_intent_id, ProjectIntent.project_id == project_id))
+            if current: return current
         intent = db.scalar(select(ProjectIntent).where(ProjectIntent.project_id == project_id).order_by(ProjectIntent.created_at.desc(), ProjectIntent.id.desc()).limit(1))
-        if not intent: raise HTTPException(404, "Project intent not found")
+        if not intent and required: raise HTTPException(404, "Project intent not found")
         return intent
 
     def update(self, db: Session, project_id: uuid.UUID, data: IntentUpdate) -> ProjectIntent:
+        project = db.scalar(select(Project).where(Project.id == project_id).with_for_update())
+        if not project: raise HTTPException(404, "Project not found")
         intent = self.latest(db, project_id)
-        for field, value in data.model_dump(exclude_unset=True, exclude={"status"}).items():
-            if value is None: continue
-            setattr(intent, field, value)
-            intent.provenance = dict(intent.provenance or {})
-            sources = dict(intent.provenance.get("field_sources", {}))
-            sources[field] = {"source_type": "user_request", "source_id": str(intent.id), "source_reference": "intent_update", "created_by": "user", "confidence": 1.0}
-            intent.provenance["field_sources"] = sources
+        values = self._copy_values(intent)
+        changed = False
+        stamp = datetime.now(timezone.utc).isoformat()
+        values["provenance"] = dict(values["provenance"] or {})
+        sources = dict(values["provenance"].get("field_sources", {}))
+        submitted = data.model_dump(exclude_unset=True)
+        raw_changed = submitted.get("raw_request") is not None and submitted["raw_request"].strip() != intent.raw_request
+        if raw_changed:
+            values["raw_request"] = submitted["raw_request"].strip()
+            sources["raw_request"] = {"source_type": "user_request", "source_id": str(intent.id), "source_reference": "intent_update", "created_by": "user", "confidence": 1.0}
+            changed = True
+            for field in LIST_FIELDS | {"project_type", "business_or_product_goal", "primary_audience", "secondary_audience", "desired_user_action", "industry", "platform", "budget_or_resource_constraints", "timeline_constraints"}:
+                if sources.get(field, {}).get("created_by") == "deterministic_extractor":
+                    values[field] = [] if field in LIST_FIELDS else None
+                    sources.pop(field, None)
+        for field, value in submitted.items():
+            if field == "raw_request" or value is None: continue
+            if values.get(field) == value: continue
+            values[field] = value
+            changed = True
+            sources[field] = {"source_type": "user_update", "source_id": str(intent.id), "source_reference": "intent_update", "created_by": "user", "confidence": 1.0}
             pending = db.scalars(select(Question).where(Question.intent_id == intent.id, Question.intent_field == field, Question.status == QuestionStatus.OPEN)).all()
             for question in pending:
                 question.answer = value
                 question.status = QuestionStatus.ANSWERED
                 question.answered_at = datetime.now(timezone.utc)
-        if data.status is not None:
-            intent.status = data.status
-        self.refresh_metrics(intent)
+        if not changed:
+            return intent
+        values["provenance"] = {**values["provenance"], "field_sources": sources, "created_at": stamp, "revision_of": str(intent.id)}
+        candidate = ProjectIntent(project_id=project_id, revision_number=intent.revision_number + 1, created_by="user", **values)
+        candidate.status = IntentStatus.DRAFT
+        self.refresh_metrics(candidate)
+        self.apply_extraction(candidate)
+        db.add(candidate); db.flush()
+        intent.superseded_by_id = candidate.id
+        project.current_intent_id = candidate.id
+        stale = db.scalars(select(Question).where(Question.intent_id == intent.id, Question.status == QuestionStatus.OPEN)).all()
+        for question in stale: question.status = QuestionStatus.SUPERSEDED
         db.flush()
-        return intent
+        return candidate
 
     def analyze(self, db: Session, project_id: uuid.UUID) -> ProjectIntent:
+        project = db.scalar(select(Project).where(Project.id == project_id).with_for_update())
+        if not project: raise HTTPException(404, "Project not found")
         intent = self.latest(db, project_id)
-        self.apply_extraction(intent)
+        values = self._copy_values(intent)
+        candidate = ProjectIntent(project_id=project_id, revision_number=intent.revision_number + 1, created_by="system", **values)
+        candidate.status = IntentStatus.DRAFT
+        compared_fields = LIST_FIELDS | {"project_type", "business_or_product_goal", "primary_audience", "secondary_audience", "desired_user_action", "industry", "platform", "raw_request", "budget_or_resource_constraints", "timeline_constraints"}
+        before = {field: getattr(candidate, field) for field in compared_fields}
+        source_snapshot = dict(candidate.provenance or {}).get("field_sources", {})
+        self.apply_extraction(candidate)
+        if all(getattr(candidate, field) == value for field, value in before.items()):
+            return intent
+        candidate.provenance = {**(candidate.provenance or {}), "revision_of": str(intent.id), "field_sources": candidate.provenance.get("field_sources", source_snapshot)}
+        db.add(candidate); db.flush(); intent.superseded_by_id = candidate.id
+        project.current_intent_id = candidate.id
+        stale = db.scalars(select(Question).where(Question.intent_id == intent.id, Question.status == QuestionStatus.OPEN)).all()
+        for question in stale: question.status = QuestionStatus.SUPERSEDED
         db.flush()
-        return intent
+        return candidate
 
 intent_extraction = IntentExtractionService()

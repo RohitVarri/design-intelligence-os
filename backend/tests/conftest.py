@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base, get_db
 from app.main import app as fastapi_app
 from app import models  # noqa: F401
+from app.core.actors import ActorContext, ActorType, get_actor_context
 
 @pytest.fixture
 def client():
@@ -21,6 +22,7 @@ def client():
         try: yield db
         finally: db.close()
     fastapi_app.dependency_overrides[get_db] = override_db
+    fastapi_app.dependency_overrides[get_actor_context] = lambda: ActorContext(ActorType.USER, actor_id="test-user", trusted=True, test_only=True)
     with TestClient(fastapi_app) as test_client: yield test_client
     fastapi_app.dependency_overrides.clear()
     Base.metadata.drop_all(engine)

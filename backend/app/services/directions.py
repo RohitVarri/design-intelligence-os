@@ -4,23 +4,17 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.models.decision import DecisionSource
 from app.models.direction import DesignDirection, DirectionStatus
 from app.models.direction_assessment import DesignDirectionAssessment
-from app.models.design_state import DesignState
 from app.models.intent import IntentStatus, ProjectIntent
-from app.models.memory import MemoryTrust
 from app.models.project import Project
 from app.models.research_evidence import EvidenceTrust, ResearchEvidence
 from app.models.question import Question, QuestionPriority, QuestionStatus
-from app.schemas.decision import DecisionCreate
 from app.schemas.direction import DirectionAssessmentCreate, DirectionCreate, DirectionStatusUpdate
-from app.schemas.memory import MemoryCreate
-from app.services.design_state import create_initial_design_state, update_design_state
-from app.services.decisions import record_decision
 from app.services.intent import IntentExtractionService
-from app.services.memory import store_memory
-from app.services.operations import operation_service
+from app.core.actors import ActorContext
+from app.schemas.operation import OperationCreate
+from app.services.operation_executor import OperationExecutor
 
 class DirectionService:
     def create(self, db: Session, project_id: uuid.UUID, data: DirectionCreate) -> list[DesignDirection]:
@@ -48,6 +42,8 @@ class DirectionService:
         pending = db.scalars(select(Question).where(Question.project_id == project_id, Question.intent_id == intent.id, Question.status == QuestionStatus.OPEN, Question.priority.in_([QuestionPriority.CRITICAL, QuestionPriority.HIGH]))).all()
         if pending:
             raise HTTPException(409, "Answer or skip high-impact questions before generating directions")
+        if intent.status == IntentStatus.READY_FOR_RESEARCH:
+            IntentExtractionService.transition_status(intent, IntentStatus.READY_FOR_DIRECTION, actor="system", reason="Direction generation readiness checks passed")
         product = intent.project_type or "digital experience"
         is_commerce = any(term in product.casefold() for term in ("commerce", "ecommerce", "e-commerce", "store")) or any("purchase" in f.casefold() for f in intent.required_features)
         lux = "luxury" in " ".join(intent.visual_preferences).casefold() or intent.industry in {"fragrance", "fashion", "beauty"}
@@ -90,6 +86,10 @@ class DirectionService:
 
     def update_status(self, db: Session, project_id: uuid.UUID, direction_id: uuid.UUID, data: DirectionStatusUpdate) -> DesignDirection:
         direction = self.get(db, project_id, direction_id)
+        # Keep selection on the controlled DesignOperation path even when this
+        # service is called directly or with a model created without validation.
+        if data.status == DirectionStatus.SELECTED:
+            raise HTTPException(409, "Select a direction through the explicit selection operation")
         if direction.status == DirectionStatus.SELECTED:
             raise HTTPException(409, "A selected direction can only be replaced through another explicit selection")
         direction.status = data.status
@@ -105,26 +105,19 @@ class DirectionService:
         direction = self.get(db, project_id, direction_id)
         return list(db.scalars(select(DesignDirectionAssessment).where(DesignDirectionAssessment.direction_id == direction.id).order_by(DesignDirectionAssessment.created_at)))
 
-    def select(self, db: Session, project_id: uuid.UUID, direction_id: uuid.UUID) -> DesignDirection:
+    def select(self, db: Session, project_id: uuid.UUID, direction_id: uuid.UUID, actor: ActorContext, executor: OperationExecutor) -> DesignDirection:
         direction = self.get(db, project_id, direction_id)
+        current_intent = IntentExtractionService.latest(db, project_id)
+        if current_intent is None or direction.intent_id != current_intent.id:
+            raise HTTPException(409, "Direction is based on a stale intent revision")
         if direction.status != DirectionStatus.PROPOSED:
             raise HTTPException(409, f"Only proposed directions can be selected; current status is {direction.status.value}")
-        previous = db.scalars(select(DesignDirection).where(DesignDirection.project_id == project_id, DesignDirection.status == DirectionStatus.SELECTED)).all()
-        for old in previous: old.status = DirectionStatus.ARCHIVED
-        direction.status = DirectionStatus.SELECTED
         intent = db.get(ProjectIntent, direction.intent_id)
         if not intent: raise HTTPException(409, "Design direction intent no longer exists")
-        intent.status = IntentStatus.APPROVED
-        state = db.get(DesignState, project_id)
-        if state is None: state = create_initial_design_state(db, project_id)
-        new_state = dict(state.state)
-        new_state["direction_selection"] = {"direction_id": str(direction.id), "name": direction.name, "status": "selected"}
-        update_design_state(db, project_id, new_state, f"User selected design direction: {direction.name}")
-        stamp = datetime.now(timezone.utc).isoformat()
-        provenance = {"source_type":"user_selection", "source_id":str(direction.id), "source_reference":"selected_design_direction", "created_by":"user", "created_at":stamp}
-        record_decision(db, project_id, DecisionCreate(source=DecisionSource.USER, title=f"Selected design direction: {direction.name}", rationale=f"The user explicitly selected '{direction.name}'. {direction.description}", provenance=provenance))
-        store_memory(db, project_id, MemoryCreate(category="design_direction", content=f"Selected design direction: {direction.name}. {direction.description}", trust=MemoryTrust.USER_APPROVED, provenance=provenance))
-        operation_service.record_human_selection(db, project_id, direction.id, direction.name, DirectionStatus.PROPOSED.value)
+        operation = OperationCreate(operation_type="select_direction", actor="user", target=f"design_direction:{direction.id}", property="status",
+            old_value="proposed", new_value="selected", scope="project", reason=f"User selected design direction: {direction.name}",
+            source="user_request", intent_id=intent.id, provenance={"direction_id":str(direction.id),"memory_candidate":{"category":"design_direction","content":direction.name}})
+        executor.execute_confirmed_user_request(db, project_id, operation, actor)
         db.flush(); return direction
 
 direction_service = DirectionService()

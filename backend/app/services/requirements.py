@@ -59,7 +59,7 @@ class RequirementService:
             proposals.append((f"Consider the visual preference: {preference}", RequirementCategory.VISUAL, source, "Preserves a visual preference without forcing it into every direction.", field_sources.get("visual_preferences", {}).get("confidence", 0.6)))
         for item in intent.accessibility_requirements:
             proposals.append((f"Address the requested accessibility consideration: {item}", RequirementCategory.ACCESSIBILITY, RequirementSource.USER, "Explicitly present in the user's request.", 0.95))
-        evidence_rows = db.scalars(select(ResearchEvidence).where(ResearchEvidence.project_id == project_id, ResearchEvidence.related_requirement.is_not(None))).all()
+        evidence_rows = db.scalars(select(ResearchEvidence).where(ResearchEvidence.project_id == project_id, ResearchEvidence.intent_id == intent.id, ResearchEvidence.related_requirement.is_not(None), ResearchEvidence.trust != "untrusted")).all()
         results = []
         for sentence, category, source, rationale, confidence in proposals:
             if sentence in existing: continue
@@ -69,7 +69,7 @@ class RequirementService:
             if sentence in existing: continue
             results.append(self._make(db, project_id, intent.id, RequirementCreate(requirement=sentence, category=RequirementCategory.UX, source=RequirementSource.RESEARCH, rationale="Research-derived proposal; review the evidence and tradeoffs before treating it as a design instruction.", confidence=evidence.confidence or 0.0, evidence_id=evidence.id), generated=True))
         if not IntentExtractionService.missing_information(intent) and not QuestionService().list_for_project(db, project_id, open_only=True):
-            intent.status = IntentStatus.READY_FOR_DIRECTION
+            IntentExtractionService.transition_status(intent, IntentStatus.READY_FOR_DIRECTION, actor="system", reason="Required intent fields and question policy are satisfied")
         db.flush(); return results
 
 requirement_service = RequirementService()

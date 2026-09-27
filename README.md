@@ -1,6 +1,6 @@
 # DesignOS
 
-DesignOS is an AI-controlled, human-supervised design environment. **BUILD 01** provides projects, structured state, recoverable versions, decisions, laws, and design memory. **BUILD 02** adds deterministic intent extraction, focused questions, a research-planning and evidence foundation, sourced design requirements, strategic direction hypotheses, and a proposal-only design-operation boundary.
+DesignOS is an AI-controlled, human-supervised design environment. **BUILD 01** provides projects, structured state, recoverable versions, decisions, laws, and design memory. **BUILD 02** adds deterministic intent extraction, focused questions, research planning, sourced requirements, and strategic direction hypotheses. **BUILD 03** adds a provider-neutral intelligence runtime and a controlled mutation path.
 
 ## Included
 
@@ -16,7 +16,12 @@ DesignOS is an AI-controlled, human-supervised design environment. **BUILD 01** 
 - Requirements retain `user`, `inferred`, `research`, or `system` source and are not treated as equally authoritative.
 - Multiple design directions can be proposed and assessed independently. Assessments retain observations and tradeoffs rather than a universal winner score.
 - Only the explicit direction-selection workflow records a user decision, approved memory, intent approval, operation event, and a versioned Design State selection.
-- Design operations can be submitted as proposals. There is no generic operation apply endpoint and AI proposals cannot mutate Design State.
+- AI runs retain routing, status, retry/fallback, validation, and context provenance. Strict Pydantic outputs are retained as candidates; malformed output is quarantined.
+- Intent updates create immutable numbered revisions with a project current-revision pointer. Questions, research, directions, and operations are scoped to the revision that produced them.
+- Research execution records runs, attempts, results, citation metadata, and untrusted evidence. Only a trusted user review can change external evidence to reviewed.
+- Design mutations use `DesignOperation` → validation → preview → explicit user approval → executor → version/audit/memory in a single database transaction. Stale intent and untrusted research references are rejected and recorded.
+- Mutating API routes require a trusted `ActorContext` injected by the hosting application. Without an authentication product, the default context is anonymous: previews are available, while approval and application fail closed. `FAKE_TEST_ACTOR` is accepted only when explicitly marked test-only.
+- No production model vendor is configured. Hosts register provider adapters with the task router; deterministic fakes are used by offline tests.
 
 ## Quick start
 
@@ -70,9 +75,17 @@ All resource routes use the `/api/v1` prefix:
 | PATCH | `/projects/{id}/directions/{direction_id}` | Reject or archive a proposal; selection has its own explicit endpoint |
 | POST | `/projects/{id}/directions/{direction_id}/assessments` | Record an evidence-bearing criterion assessment |
 | POST | `/projects/{id}/directions/{direction_id}/select` | Require `{"confirm": true}` to record an explicit direction selection and state event |
-| GET / POST | `/projects/{id}/operations` | List or record proposed design operations (no execution) |
+| GET / POST | `/projects/{id}/operations` | List operations or submit a proposal |
+| POST | `/projects/{id}/operations/{operation_id}/preview` | Validate and preview an operation without changing design state |
+| POST | `/projects/{id}/operations/{operation_id}/approve` | Record explicit approval or rejection from a trusted user |
+| POST | `/projects/{id}/operations/{operation_id}/apply` | Apply an approved operation atomically |
+| POST | `/projects/{id}/intent/ai-candidate` | Generate a typed intent candidate; does not update intent |
+| POST | `/projects/{id}/questions/ai-candidate` | Generate typed question candidates; does not add questions |
+| POST | `/projects/{id}/design/ai-candidate` | Generate a typed design-operation candidate; does not apply it |
+| POST | `/projects/{id}/research-plan/{plan_id}/execute` | Execute plan queries through registered research providers |
+| POST | `/projects/{id}/research/{evidence_id}/review` | Have a trusted user review external evidence provenance/trust |
 
-Design state has the keys `pages`, `components`, `design_tokens`, `ux_navigation`, `assets`, `design_laws`, and `metadata`. A full replacement is a versioned mutation. A surgical edit uses dot-separated keys and list indices, for example `pages.0.title`. A restore does not rewrite history: it applies the selected snapshot and records a new child version.
+Design state has the keys `pages`, `components`, `design_tokens`, `ux_navigation`, `assets`, `design_laws`, `metadata`, and `direction_selection`. A full replacement is a versioned mutation. A surgical edit uses dot-separated keys and list indices, for example `pages.0.title`. A restore does not rewrite history: it applies the selected snapshot and records a new child version.
 
 ## Tests
 
@@ -82,7 +95,7 @@ pytest
 
 Tests use SQLite and do not require a running PostgreSQL server. Apply the included Alembic migration against PostgreSQL to validate the production schema. pgvector extension setup and embedding columns are deferred until a concrete memory-search design is in scope.
 
-## BUILD 02 architecture
+## BUILD 02 architecture (retained foundation)
 
 ```text
 User Request
@@ -110,8 +123,8 @@ BUILD 02 uses deterministic, rule-based extraction and exposes an `IntentExtract
 
 Research plans are generated from known intent fields. `ResearchProvider` is an interface only; evidence must be supplied to the API, defaults to untrusted, and never becomes an approved requirement automatically. Inference and research-derived requirements remain labeled and proposed. Multiple direction hypotheses and independent assessments expose strengths, tradeoffs, risks, and evidence without aggregating them into a universal score.
 
-The operation flow is reserved as `Intent → Operation → Validation → Impact Analysis → Preview → Approval → Apply → Version → Memory`. BUILD 02 only persists proposals and records the explicit human direction-selection event. It does not execute arbitrary operation requests.
+The operation flow is enforced as `Analyze → Propose → Validate → Preview → Human Approval → Execute → Version → Audit → Memory`. AI output remains a proposal until explicitly authorized and approved. Memory is written only after successful application.
 
-## BUILD 02 deliberately does not implement
+## Scope and limitations
 
-No OpenAI, Anthropic, Gemini, or other LLM calls; no live research search or scraping; no autonomous agent execution; no website or React generation; no Figma integration; no vector database or embeddings; no image generation or browser automation; no collaboration, authentication, or billing. The rule-based extractor is intentionally narrow and leaves unsupported fields unknown. Direction hypotheses are structured backend concepts, not finished visual designs. Since authentication is out of scope, deployments must protect user-only selection and write endpoints at the hosting boundary until authentication is added.
+BUILD 03 does not include a production provider integration, live internet search/scraping, a design sandbox, wireframe or visual design generation, website generation, Figma, autonomous agents, collaboration, login/accounts, billing, or pgvector embeddings. The rule-based extractor remains deliberately narrow. Deployments must provide a trusted host `ActorContext` adapter and protect its injection boundary; there is no authentication system in this build.

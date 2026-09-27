@@ -21,7 +21,10 @@ class ResearchEvidenceCreate(BaseModel):
     trend_stage: TrendStage = TrendStage.UNKNOWN
     tags: list[str] = Field(default_factory=list)
     related_requirement: str | None = None
-    trust: EvidenceTrust = EvidenceTrust.UNTRUSTED
+
+class EvidenceReview(BaseModel):
+    eligible: bool
+    rationale: str = Field(min_length=1, max_length=2000)
 
 class ResearchEvidenceRead(ResearchEvidenceCreate):
     model_config = ConfigDict(from_attributes=True)
@@ -31,6 +34,7 @@ class ResearchEvidenceRead(ResearchEvidenceCreate):
     retrieved_at: datetime
     created_at: datetime
     provenance: dict
+    trust: EvidenceTrust
 
 class ResearchQueryRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)

@@ -13,6 +13,8 @@ class QuestionCreate(BaseModel):
     answer_type: Literal["text", "single_choice", "multi_choice", "boolean", "number"] = "text"
     options: list[Any] = Field(default_factory=list)
     required: bool = True
+    dependencies: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0, le=1)
 
 class QuestionUpdate(BaseModel):
     status: QuestionStatus | None = None
@@ -38,5 +40,9 @@ class QuestionRead(BaseModel):
     status: QuestionStatus
     answer: Any
     intent_field: str | None
+    dependencies: list[str] = Field(default_factory=list)
+    suppression_reason: str | None
+    provenance: dict = Field(default_factory=dict)
+    confidence: float = 1.0
     created_at: datetime
     answered_at: datetime | None
