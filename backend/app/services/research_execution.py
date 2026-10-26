@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.actors import ActorContext
+from app.core.locking import lock_project
 from app.models.intent import ProjectIntent
 from app.models.intent import IntentStatus
 from app.models.project import Project
@@ -42,6 +43,8 @@ class ResearchExecutionService:
             attempt.completed_at = datetime.now(timezone.utc)
             if outcome.accepted and outcome.candidate:
                 payload = outcome.candidate.payload
+                if payload.get("results"):
+                    lock_project(db, project_id)
                 for item in payload.get("results", []):
                     result = ResearchResult(attempt_id=attempt.id, query_id=query.id, title=item["title"], claim=item["claim"],
                         source_name=item.get("source_name"), source_url=item.get("source_url"), citation=item.get("citation", {}),

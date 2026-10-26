@@ -1,4 +1,6 @@
 """Build source-checked, revision-scoped context for design reasoning."""
+import hashlib
+import json
 import uuid
 
 from fastapi import HTTPException
@@ -153,6 +155,8 @@ class DesignReasoningService:
                  "impact_score": row.impact_score, "intent_field": row.intent_field, "reason": row.reason}
                 for row in questions
             ],
-            "source_manifest": manifest,
         }
+        context_bytes = json.dumps(context, sort_keys=True, separators=(",", ":"), default=str).encode()
+        manifest["content_digest"] = hashlib.sha256(context_bytes).hexdigest()
+        context["source_manifest"] = manifest
         return DesignReasoningContextRead.model_validate(context, strict=True).model_dump(mode="json")

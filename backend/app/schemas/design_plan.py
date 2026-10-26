@@ -212,6 +212,7 @@ class SourceManifest(BaseModel):
     research: list[str]
     design_laws: list[str]
     questions: list[str]
+    content_digest: str | None = None
 
 
 class DesignReasoningContextRead(BaseModel):

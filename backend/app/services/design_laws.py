@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models.design_law import DesignLaw
 from app.models.design_state import DesignState
-from app.models.project import Project
+from app.core.locking import lock_project
 from app.schemas.design_law import DesignLawCreate, DesignLawUpdate
 from app.services.design_state import create_initial_design_state, update_design_state
 
@@ -23,7 +23,7 @@ def _version_laws(db: Session, project_id: uuid.UUID, summary: str) -> None:
 
 def create_design_law(db: Session, project_id: uuid.UUID, data: DesignLawCreate) -> DesignLaw:
     """Create a law only for an existing project."""
-    if not db.get(Project, project_id): raise HTTPException(404, "Project not found")
+    lock_project(db, project_id)
     law = DesignLaw(project_id=project_id, **data.model_dump())
     db.add(law); db.flush()
     _version_laws(db, project_id, f"Added design law: {law.title}")
@@ -31,6 +31,7 @@ def create_design_law(db: Session, project_id: uuid.UUID, data: DesignLawCreate)
 
 def update_design_law(db: Session, project_id: uuid.UUID, law_id: uuid.UUID, data: DesignLawUpdate) -> DesignLaw:
     """Update law attributes without changing unrelated design state."""
+    lock_project(db, project_id)
     law = db.scalar(select(DesignLaw).where(DesignLaw.id == law_id, DesignLaw.project_id == project_id))
     if not law: raise HTTPException(404, "Design law not found")
     for key, value in data.model_dump(exclude_unset=True).items(): setattr(law, key, value)

@@ -51,6 +51,7 @@ class DesignPlan(Base):
             name="fk_design_plans_direction_project",
         ),
         UniqueConstraint("candidate_id", name="uq_design_plan_candidate"),
+        UniqueConstraint("project_id", "id", name="uq_design_plan_project_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)

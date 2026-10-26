@@ -58,6 +58,10 @@ from app.schemas.design_plan import DesignPlanCandidateResponse, DesignPlanRead
 from app.models.design_plan import DesignPlan, DesignPlanStatus
 from app.services.design_reasoning import DesignReasoningService
 from app.services.design_plan_workflow import DesignPlanWorkflow
+from app.schemas.wireframe import WireframeCandidateResponse, WireframeSetRead
+from app.services.wireframes import WireframeWorkflow, read_approved_wireframes
+from app.schemas.visual_design import VisualDesignCandidateResponse, VisualDesignRead
+from app.services.visual_designs import VisualDesignWorkflow, read_approved_visual_design
 
 router = APIRouter()
 
@@ -132,7 +136,8 @@ def compare_version_route(project_id: uuid.UUID, left_id: uuid.UUID, right_id: u
 def restore_version_route(project_id: uuid.UUID, version_id: uuid.UUID, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context)):
     version = get_version(db, project_id, version_id)
     operation = OperationCreate(operation_type="replace", target="*", new_value=version.state,
-        reason=f"Restored from version {version.version_number}", intent_id=_project(db, project_id).current_intent_id)
+        reason=f"Restored from version {version.version_number}", intent_id=_project(db, project_id).current_intent_id,
+        provenance={"restored_version_id": str(version.id)})
     OperationExecutor().execute_confirmed_user_request(db, project_id, operation, actor)
     obj = get_design_state(db, project_id)
     db.commit(); db.refresh(obj); return obj
@@ -405,5 +410,50 @@ def read_design_plan(project_id: uuid.UUID, db: Session = Depends(get_db)):
     if plan is None:
         raise HTTPException(404, "Design Plan not found")
     return plan
+
+
+@router.post("/projects/{project_id}/wireframes/propose", response_model=WireframeCandidateResponse)
+def propose_wireframes(project_id: uuid.UUID, db: Session = Depends(get_db), runtime: ProviderRuntime = Depends(get_provider_runtime), actor: ActorContext = Depends(get_actor_context)):
+    _project(db, project_id)
+    result = WireframeWorkflow().propose(db, project_id, runtime)
+    db.commit()
+    return result
+
+
+@router.post("/projects/{project_id}/wireframes/candidates/{candidate_id}/operation", response_model=OperationRead, status_code=201)
+def propose_wireframe_operation(project_id: uuid.UUID, candidate_id: uuid.UUID, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context), executor: OperationExecutor = Depends(get_operation_executor)):
+    _project(db, project_id)
+    operation = WireframeWorkflow().create_operation(db, project_id, candidate_id, actor, executor)
+    db.commit(); db.refresh(operation)
+    return operation
+
+
+@router.get("/projects/{project_id}/wireframes", response_model=WireframeSetRead)
+def read_wireframes(project_id: uuid.UUID, db: Session = Depends(get_db)):
+    _project(db, project_id)
+    return read_approved_wireframes(db, project_id)
+
+
+@router.post("/projects/{project_id}/visual-design/propose", response_model=VisualDesignCandidateResponse)
+def propose_visual_design(project_id: uuid.UUID, db: Session = Depends(get_db), runtime: ProviderRuntime = Depends(get_provider_runtime), actor: ActorContext = Depends(get_actor_context)):
+    _project(db, project_id)
+    result = VisualDesignWorkflow().propose(db, project_id, runtime)
+    db.commit()
+    return result
+
+
+@router.post("/projects/{project_id}/visual-design/candidates/{candidate_id}/operation", response_model=OperationRead, status_code=201)
+def propose_visual_design_operation(project_id: uuid.UUID, candidate_id: uuid.UUID, db: Session = Depends(get_db), actor: ActorContext = Depends(get_actor_context), executor: OperationExecutor = Depends(get_operation_executor)):
+    _project(db, project_id)
+    operation = VisualDesignWorkflow().create_operation(db, project_id, candidate_id, actor, executor)
+    db.commit()
+    db.refresh(operation)
+    return operation
+
+
+@router.get("/projects/{project_id}/visual-design", response_model=VisualDesignRead)
+def read_visual_design(project_id: uuid.UUID, db: Session = Depends(get_db)):
+    _project(db, project_id)
+    return read_approved_visual_design(db, project_id)
 
 _guard_write_routes()

@@ -18,6 +18,11 @@ BUILD_03_NEW_TABLES = frozenset({
 })
 
 
+def _new_tables(existing: set[str], tables):
+    """Restrict this historical revision to its declared table inventory."""
+    return [table for table in tables if table.name in BUILD_03_NEW_TABLES and table.name not in existing]
+
+
 def _restore_enum(enum_name: str, labels: tuple[str, ...], table: str, column: str,
                   downgraded_values: dict[str, str]) -> None:
     """Replace an enum with the BUILD 02 labels without dropping dependent data."""
@@ -71,12 +76,12 @@ def upgrade() -> None:
     if context.is_offline_mode():
         # Offline SQL generation has no catalog to inspect. The revision's
         # explicit table inventory keeps generated DDL deterministic.
-        new_tables = [table for table in Base.metadata.sorted_tables if table.name in BUILD_03_NEW_TABLES]
+        new_tables = _new_tables(set(), Base.metadata.sorted_tables)
         for table in new_tables:
             table.create(bind=bind, checkfirst=False)
     else:
         existing = set(sa.inspect(bind).get_table_names())
-        new_tables = [table for table in Base.metadata.sorted_tables if table.name not in existing]
+        new_tables = _new_tables(existing, Base.metadata.sorted_tables)
         Base.metadata.create_all(bind=bind, tables=new_tables, checkfirst=True)
 
     op.execute("""WITH numbered AS (

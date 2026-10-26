@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models.intent import ProjectIntent
 from app.models.project import Project
+from app.core.locking import lock_project
 from app.models.research_evidence import ResearchEvidence, EvidenceTrust
 from app.models.research_plan import ResearchPlan, ResearchPlanStatus
 from app.models.research_query import ResearchQuery, ResearchQueryPriority
@@ -76,7 +77,7 @@ class ResearchService:
         return list(db.scalars(select(ResearchEvidence).where(ResearchEvidence.project_id == project_id).order_by(ResearchEvidence.created_at.desc())))
 
     def store_evidence(self, db: Session, project_id: uuid.UUID, data: ResearchEvidenceCreate) -> ResearchEvidence:
-        if not db.get(Project, project_id): raise HTTPException(404, "Project not found")
+        lock_project(db, project_id)
         intent = IntentExtractionService.latest(db, project_id)
         evidence_id = uuid.uuid4()
         provenance = {"source_type": "user_provided_research", "source_id": str(evidence_id), "source_reference": data.source_url or data.source_name or "user_submitted_evidence", "created_by": "user", "created_at": datetime.now(timezone.utc).isoformat()}
@@ -87,6 +88,7 @@ class ResearchService:
 
     def review_evidence(self, db: Session, project_id: uuid.UUID, evidence_id: uuid.UUID, *, eligible: bool, rationale: str, reviewer_id: str) -> ResearchEvidence:
         """Apply an auditable human trust transition; request payload cannot set trust directly."""
+        lock_project(db, project_id)
         row = db.scalar(select(ResearchEvidence).where(ResearchEvidence.project_id == project_id, ResearchEvidence.id == evidence_id))
         if not row: raise HTTPException(404, "Research evidence not found")
         row.trust = EvidenceTrust.REVIEWED if eligible else EvidenceTrust.UNTRUSTED

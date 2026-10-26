@@ -11,6 +11,8 @@ class TaskType(str, Enum):
     RESEARCH_SYNTHESIS = "research_synthesis"
     PROPOSAL_GENERATION = "proposal_generation"
     DESIGN_PLAN_GENERATION = "design_plan_generation"
+    WIREFRAME_GENERATION = "wireframe_generation"
+    VISUAL_DESIGN_GENERATION = "visual_design_generation"
 
 
 @dataclass(frozen=True)

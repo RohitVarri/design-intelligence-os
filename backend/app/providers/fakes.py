@@ -6,6 +6,8 @@ from typing import Any
 from app.providers.contracts import ProviderResult, TaskType
 from app.providers.schemas import IntentCandidateOutput, QuestionCandidatesOutput
 from app.schemas.design_plan import DesignPlanOutput
+from app.schemas.wireframe import WireframeOutput
+from app.schemas.visual_design import VisualDesignOutput
 
 
 class FakeModelProvider:
@@ -41,4 +43,14 @@ class FakeModelProvider:
             output = DeterministicDesignPlanEngine().generate(payload["reasoning_context"])
             validated = DesignPlanOutput.model_validate_json(json.dumps(output), strict=True)
             return ProviderResult(validated.model_dump(), request_id="fake-design-plan")
+        if task == TaskType.WIREFRAME_GENERATION:
+            from app.services.wireframes import DeterministicWireframeEngine
+            output = DeterministicWireframeEngine().generate(payload["approved_plan"])
+            validated = WireframeOutput.model_validate_json(json.dumps(output), strict=True)
+            return ProviderResult(validated.model_dump(), request_id="fake-wireframe")
+        if task == TaskType.VISUAL_DESIGN_GENERATION:
+            from app.services.visual_designs import DeterministicVisualDesignEngine
+            output = DeterministicVisualDesignEngine().generate(payload["approved_plan"], payload["approved_wireframe"])
+            validated = VisualDesignOutput.model_validate_json(json.dumps(output), strict=True)
+            return ProviderResult(validated.model_dump(), request_id="fake-visual-design")
         return ProviderResult({"items": [], "summary": "No candidates."}, request_id=f"fake-{task.value}")

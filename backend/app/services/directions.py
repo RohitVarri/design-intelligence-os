@@ -8,6 +8,7 @@ from app.models.direction import DesignDirection, DirectionStatus
 from app.models.direction_assessment import DesignDirectionAssessment
 from app.models.intent import IntentStatus, ProjectIntent
 from app.models.project import Project
+from app.core.locking import lock_project
 from app.models.research_evidence import EvidenceTrust, ResearchEvidence
 from app.models.question import Question, QuestionPriority, QuestionStatus
 from app.schemas.direction import DirectionAssessmentCreate, DirectionCreate, DirectionStatusUpdate
@@ -85,6 +86,7 @@ class DirectionService:
         return row
 
     def update_status(self, db: Session, project_id: uuid.UUID, direction_id: uuid.UUID, data: DirectionStatusUpdate) -> DesignDirection:
+        lock_project(db, project_id)
         direction = self.get(db, project_id, direction_id)
         # Keep selection on the controlled DesignOperation path even when this
         # service is called directly or with a model created without validation.

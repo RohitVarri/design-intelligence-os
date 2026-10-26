@@ -1,6 +1,6 @@
 # DesignOS
 
-DesignOS is an AI-controlled, human-supervised design environment. **BUILD 01** provides projects, structured state, recoverable versions, decisions, laws, and design memory. **BUILD 02** adds deterministic intent extraction, focused questions, research planning, sourced requirements, and strategic direction hypotheses. **BUILD 03** adds a provider-neutral intelligence runtime and a controlled mutation path.
+DesignOS is an AI-controlled, human-supervised design environment. **BUILD 01** provides projects, structured state, recoverable versions, decisions, laws, and design memory. **BUILD 02** adds deterministic intent extraction, focused questions, research planning, sourced requirements, and strategic direction hypotheses. **BUILD 03** adds a provider-neutral intelligence runtime and a controlled mutation path. **BUILD 04** adds structured Design Plans, and **BUILD 05** adds page-level wireframe intelligence behind the same human approval boundary.
 
 ## Included
 
@@ -167,3 +167,35 @@ BUILD 04 endpoints:
 | GET | `/projects/{id}/design-plan` | Return the currently approved plan; returns 404 when none exists. |
 
 BUILD 04 does **not** generate wireframes, visual designs, React, websites, or Figma files. Those belong to later builds.
+
+## BUILD 05 — Wireframe Intelligence
+
+BUILD 05 adds structured, low-fidelity wireframe plans for every page in the currently approved BUILD 04 Design Plan. Each page wireframe records ordered regions, content elements, component references, interactions, responsive notes, accessibility notes, rationale, and confidence. Provider output is schema-validated and checked to cover each approved plan page exactly once.
+
+Wireframe generation creates a persisted candidate only. Candidate provenance binds it to the approved plan digest and current reasoning-context digest. A candidate must pass the shared DesignOperation validation and preview, then explicit trusted-user approval, before apply. Apply stores the approved wireframe in versioned Design State and creates audit and user-approved memory records. Later approved wireframe sets supersede earlier sets without deleting their records or snapshots.
+
+BUILD 05 endpoints:
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| POST | `/projects/{id}/wireframes/propose` | Generate a typed wireframe candidate for every page in the current approved Design Plan. |
+| POST | `/projects/{id}/wireframes/candidates/{candidate_id}/operation` | Bind a valid wireframe candidate to the shared DesignOperation lifecycle. |
+| GET | `/projects/{id}/wireframes` | Return the currently approved wireframe set; returns 404 when none exists. |
+
+BUILD 05 does **not** render visual screens, produce HTML/React, or write to Figma. The deterministic wireframe engine is for offline tests; production deployments must register a provider adapter.
+
+## BUILD 06 — Visual Design Intelligence
+
+BUILD 06 adds a strict, page-level visual design specification derived from the current approved Design Plan and wireframe. It defines concrete semantic color and typography tokens, spacing and layout values, component variants and states, region treatments, responsive breakpoints, declared contrast pairs, asset provenance, assumptions, unresolved decisions, risks, and confidence. Every page, region, and component reference must preserve the approved wireframe structure.
+
+Visual design is proposal-only until bound to a DesignOperation, validated against current source content, previewed, and explicitly approved by a trusted user. Apply stores the specification in versioned Design State, retains the persisted artifact and provenance, and uses the existing version, audit, and user-approved memory path. Restoring a prior version reactivates the referenced plan, wireframe, and visual artifact records so retrieval follows the restored snapshot.
+
+BUILD 06 endpoints:
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| POST | /projects/{id}/visual-design/propose | Generate and persist a structured candidate from the current approved plan and wireframe. |
+| POST | /projects/{id}/visual-design/candidates/{candidate_id}/operation | Bind a valid candidate to the shared DesignOperation lifecycle. |
+| GET | /projects/{id}/visual-design | Return the current approved visual design specification. |
+
+The existing operation preview, approval, and apply endpoints remain the only mutation path. Contrast checks cover declared foreground/background token pairs and do not establish full accessibility conformance. BUILD 06 does **not** render screens, generate websites, or synchronize Figma. The deterministic provider is for offline tests; deployments must register a provider adapter.

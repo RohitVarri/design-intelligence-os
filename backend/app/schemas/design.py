@@ -15,6 +15,8 @@ class DesignStateInput(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     direction_selection: dict[str, Any] = Field(default_factory=dict)
     design_plan: dict[str, Any] = Field(default_factory=dict)
+    wireframes: dict[str, Any] = Field(default_factory=dict)
+    visual_design: dict[str, Any] = Field(default_factory=dict)
 
 class DesignStateRead(ORMModel):
     project_id: uuid.UUID

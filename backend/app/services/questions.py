@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.intent import ProjectIntent
 from app.models.question import Question, QuestionCategory, QuestionPriority, QuestionStatus
 from app.models.project import Project
+from app.core.locking import lock_project
 from app.schemas.question import QuestionCreate
 from app.services.intent import IntentExtractionService
 
@@ -64,6 +65,9 @@ class QuestionService:
         db.add(obj); db.flush(); return obj
 
     def generate(self, db: Session, project_id: uuid.UUID, intent: ProjectIntent) -> list[Question]:
+        project = lock_project(db, project_id)
+        if project.current_intent_id != intent.id:
+            raise HTTPException(409, "Intent changed before questions could be generated")
         candidates: list[QuestionCandidate] = []
         field_sources = (intent.provenance or {}).get("field_sources", {})
         if not intent.desired_user_action:
@@ -86,7 +90,7 @@ class QuestionService:
         return [self._persist(db, project_id, intent.id, QuestionCreate(question=item.question, category=item.category, reason=item.reason, intent_field=item.intent_field, answer_type=item.answer_type, required=item.required, dependencies=list(item.dependencies)), item.factors) for item in candidates[:4]]
 
     def create(self, db: Session, project_id: uuid.UUID, data: QuestionCreate) -> Question:
-        if not db.get(Project, project_id): raise HTTPException(404, "Project not found")
+        lock_project(db, project_id)
         intent = IntentExtractionService.latest(db, project_id)
         return self._persist(db, project_id, intent.id, data)
 
@@ -102,6 +106,7 @@ class QuestionService:
         return obj
 
     def answer(self, db: Session, project_id: uuid.UUID, question_id: uuid.UUID, answer) -> Question:
+        lock_project(db, project_id)
         obj = self.get(db, project_id, question_id)
         if obj.status != QuestionStatus.OPEN: raise HTTPException(409, "Only open questions can be answered")
         if obj.answer_type == "text" and not isinstance(answer, str): raise HTTPException(422, "This question expects a text answer")
@@ -139,6 +144,7 @@ class QuestionService:
         return obj
 
     def update(self, db: Session, project_id: uuid.UUID, question_id: uuid.UUID, *, status=None, reason=None) -> Question:
+        lock_project(db, project_id)
         obj = self.get(db, project_id, question_id)
         if status == QuestionStatus.ANSWERED: raise HTTPException(422, "Use the answer endpoint to answer a question")
         if status is not None: obj.status = status

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models.intent import IntentStatus, ProjectIntent
 from app.models.project import Project
+from app.core.locking import lock_project
 from app.models.requirement import DesignRequirement, RequirementCategory, RequirementSource
 from app.models.research_evidence import ResearchEvidence
 from app.schemas.requirement import RequirementCreate
@@ -32,7 +33,7 @@ class RequirementService:
         db.add(obj); db.flush(); return obj
 
     def create(self, db: Session, project_id: uuid.UUID, data: RequirementCreate) -> DesignRequirement:
-        if not db.get(Project, project_id): raise HTTPException(404, "Project not found")
+        lock_project(db, project_id)
         intent = None
         try: intent = IntentExtractionService.latest(db, project_id)
         except HTTPException as exc:
@@ -44,6 +45,7 @@ class RequirementService:
         return list(db.scalars(select(DesignRequirement).where(DesignRequirement.project_id == project_id).order_by(DesignRequirement.created_at.desc())))
 
     def generate_from_intent(self, db: Session, project_id: uuid.UUID) -> list[DesignRequirement]:
+        lock_project(db, project_id)
         intent = IntentExtractionService.latest(db, project_id)
         existing = {row.requirement for row in db.scalars(select(DesignRequirement).where(DesignRequirement.project_id == project_id, DesignRequirement.intent_id == intent.id))}
         field_sources = (intent.provenance or {}).get("field_sources", {})

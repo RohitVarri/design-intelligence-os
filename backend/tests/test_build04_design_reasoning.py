@@ -149,7 +149,9 @@ def test_reasoning_context_uses_current_intent_direction_and_revision_scoped_sou
     assert context["source_manifest"] == {
         "intent": [str(current.id)], "requirements": [str(req.id)], "research": [str(evidence.id)],
         "design_laws": [str(law.id)], "questions": [str(high.id)],
+        "content_digest": context["source_manifest"]["content_digest"],
     }
+    assert len(context["source_manifest"]["content_digest"]) == 64
     assert str(old.id) not in context["source_manifest"]["intent"]
     assert str(old_req.id) not in context["source_manifest"]["requirements"]
     assert str(old_evidence.id) not in context["source_manifest"]["research"]
@@ -343,6 +345,22 @@ def test_research_revoked_after_generation_is_rejected_at_preview(client):
     preview = client.post(f"/api/v1/projects/{project_id}/operations/{operation['id']}/preview")
     assert preview.status_code == 409
     assert "untrusted" in preview.json()["detail"].lower()
+
+
+def test_design_law_content_change_with_same_id_is_rejected_at_preview(client):
+    _enable_provider()
+    project_id, _ = _api_project(client)
+    law = client.post(f"/api/v1/projects/{project_id}/laws", json={
+        "title": "Reading order", "rule": "Keep essential content readable."
+    }).json()
+    candidate = client.post(f"/api/v1/projects/{project_id}/design-plan/propose").json()
+    operation = client.post(f"/api/v1/projects/{project_id}/design-plan/candidates/{candidate['candidate_id']}/operation").json()
+    changed = client.patch(f"/api/v1/projects/{project_id}/laws/{law['id']}", json={"title": "Updated reading order"})
+    assert changed.status_code == 200, changed.text
+    before_preview = client.get(f"/api/v1/projects/{project_id}/design").json()
+    preview = client.post(f"/api/v1/projects/{project_id}/operations/{operation['id']}/preview")
+    assert preview.status_code == 409
+    assert "source content changed" in preview.json()["detail"].lower()
     after_preview = client.get(f"/api/v1/projects/{project_id}/design").json()
     assert after_preview["current_version_id"] == before_preview["current_version_id"]
 
